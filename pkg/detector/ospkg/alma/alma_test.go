@@ -1,19 +1,20 @@
 package alma_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	fake "k8s.io/utils/clock/testing"
 
-	ftypes "github.com/aquasecurity/fanal/types"
 	"github.com/aquasecurity/trivy-db/pkg/db"
 	dbTypes "github.com/aquasecurity/trivy-db/pkg/types"
 	"github.com/aquasecurity/trivy-db/pkg/vulnsrc/vulnerability"
-	"github.com/aquasecurity/trivy/pkg/dbtest"
+	"github.com/aquasecurity/trivy/internal/dbtest"
+	"github.com/aquasecurity/trivy/pkg/clock"
 	"github.com/aquasecurity/trivy/pkg/detector/ospkg/alma"
+	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/types"
 )
 
@@ -49,7 +50,7 @@ func TestScanner_Detect(t *testing.T) {
 						SrcVersion:      "3.6.8",
 						SrcRelease:      "36.el8.alma",
 						Modularitylabel: "",
-						License:         "Python",
+						Licenses:        []string{"Python"},
 						Layer:           ftypes.Layer{},
 					},
 				},
@@ -70,8 +71,11 @@ func TestScanner_Detect(t *testing.T) {
 			},
 		},
 		{
-			name:     "skip modular package",
-			fixtures: []string{"testdata/fixtures/modular.yaml", "testdata/fixtures/data-source.yaml"},
+			name: "skip modular package",
+			fixtures: []string{
+				"testdata/fixtures/modular.yaml",
+				"testdata/fixtures/data-source.yaml",
+			},
 			args: args{
 				osVer: "8.4",
 				pkgs: []ftypes.Package{
@@ -85,8 +89,8 @@ func TestScanner_Detect(t *testing.T) {
 						SrcEpoch:        1,
 						SrcVersion:      "1.14.1",
 						SrcRelease:      "8.module_el8.3.0+2165+af250afe.alma",
-						Modularitylabel: "nginx:1.14:8040020210610090123:9f9e2e7e", // actual: "", ref: https://bugs.almalinux.org/view.php?id=173
-						License:         "BSD",
+						Modularitylabel: "", // ref: https://bugs.almalinux.org/view.php?id=173 ,  https://github.com/aquasecurity/trivy/issues/2342#issuecomment-1158459628
+						Licenses:        []string{"BSD"},
 						Layer:           ftypes.Layer{},
 					},
 				},
@@ -94,8 +98,51 @@ func TestScanner_Detect(t *testing.T) {
 			want: nil,
 		},
 		{
-			name:     "Get returns an error",
-			fixtures: []string{"testdata/fixtures/invalid.yaml", "testdata/fixtures/data-source.yaml"},
+			name: "modular package",
+			fixtures: []string{
+				"testdata/fixtures/modular.yaml",
+				"testdata/fixtures/data-source.yaml",
+			},
+			args: args{
+				osVer: "8.6",
+				pkgs: []ftypes.Package{
+					{
+						Name:            "httpd",
+						Epoch:           0,
+						Version:         "2.4.37",
+						Release:         "46.module_el8.6.0+2872+fe0ff7aa.1.alma",
+						Arch:            "x86_64",
+						SrcName:         "httpd",
+						SrcEpoch:        0,
+						SrcVersion:      "2.4.37",
+						SrcRelease:      "46.module_el8.6.0+2872+fe0ff7aa.1.alma",
+						Modularitylabel: "httpd:2.4:8060020220510105858:9edba152",
+						Licenses:        []string{"ASL 2.0"},
+						Layer:           ftypes.Layer{},
+					},
+				},
+			},
+			want: []types.DetectedVulnerability{
+				{
+					PkgName:          "httpd",
+					VulnerabilityID:  "CVE-2020-35452",
+					InstalledVersion: "2.4.37-46.module_el8.6.0+2872+fe0ff7aa.1.alma",
+					FixedVersion:     "2.4.37-47.module_el8.6.0+2872+fe0ff7aa.1.alma",
+					Layer:            ftypes.Layer{},
+					DataSource: &dbTypes.DataSource{
+						ID:   vulnerability.Alma,
+						Name: "AlmaLinux Product Errata",
+						URL:  "https://errata.almalinux.org/",
+					},
+				},
+			},
+		},
+		{
+			name: "Get returns an error",
+			fixtures: []string{
+				"testdata/fixtures/invalid.yaml",
+				"testdata/fixtures/data-source.yaml",
+			},
 			args: args{
 				osVer: "8.4",
 				pkgs: []ftypes.Package{
@@ -116,13 +163,13 @@ func TestScanner_Detect(t *testing.T) {
 			defer db.Close()
 
 			s := alma.NewScanner()
-			got, err := s.Detect(tt.args.osVer, nil, tt.args.pkgs)
+			got, err := s.Detect(nil, tt.args.osVer, nil, tt.args.pkgs)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -130,7 +177,7 @@ func TestScanner_Detect(t *testing.T) {
 
 func TestScanner_IsSupportedVersion(t *testing.T) {
 	type args struct {
-		osFamily string
+		osFamily ftypes.OSType
 		osVer    string
 	}
 	tests := []struct {
@@ -158,19 +205,20 @@ func TestScanner_IsSupportedVersion(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "unknown",
+			name: "latest",
 			now:  time.Date(2019, 5, 2, 23, 59, 59, 0, time.UTC),
 			args: args{
 				osFamily: "alma",
-				osVer:    "unknown",
+				osVer:    "999",
 			},
-			want: false,
+			want: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := alma.NewScanner(alma.WithClock(fake.NewFakeClock(tt.now)))
-			got := s.IsSupportedVersion(tt.args.osFamily, tt.args.osVer)
+			ctx := clock.With(context.Background(), tt.now)
+			s := alma.NewScanner()
+			got := s.IsSupportedVersion(ctx, tt.args.osFamily, tt.args.osVer)
 			assert.Equal(t, tt.want, got)
 		})
 	}
