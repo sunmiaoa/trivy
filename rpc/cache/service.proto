@@ -21,6 +21,7 @@ message ArtifactInfo {
   string                    docker_version = 4;
   string                    os             = 5;
   repeated common.Package history_packages = 6;
+  common.Secret           secret           = 7;
 }
 
 message PutArtifactRequest {
@@ -40,6 +41,8 @@ message BlobInfo {
   string                           digest            = 7;
   string                           diff_id           = 8;
   repeated common.CustomResource custom_resources    = 10;
+  repeated common.Secret secrets                     = 12;
+  repeated common.LicenseFile licenses               = 13;
 }
 
 message PutBlobRequest {

@@ -16,6 +16,7 @@
 *.out
 
 .idea
+.vscode
 
 # Directory Cache Files
 .DS_Store
@@ -24,9 +25,21 @@ thumbs.db
 # test fixtures
 coverage.txt
 integration/testdata/fixtures/images
+integration/testdata/fixtures/vm-images
+internal/gittest/testdata/test-repo
 
 # SBOMs generated during CI
 /bom.json
 
 # goreleaser output
 dist
+
+# WebAssembly
+*.wasm
+
+# Signing
+gpg.key
+cmd/trivy/trivy
+
+# RPM
+*.rpm
